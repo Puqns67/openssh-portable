@@ -90,6 +90,11 @@
 #include "monitor_wrap.h"
 #include "sftp.h"
 #include "atomicio.h"
+#ifdef NOTIFY
+#include <stdbool.h>
+#include <libnotify/notify.h>
+#include <cjson/cJSON.h>
+#endif
 
 #if defined(KRB5) && defined(USE_AFS)
 #include <kafs.h>
@@ -355,6 +360,171 @@ xauth_valid_string(const char *s)
 	}
 	return 1;
 }
+
+#ifdef NOTIFY
+#define DEFAULT_NOTIFY_SOURCE "sshd-session"
+#define DEFAULT_NOTIFY_ICON "dialog-information"
+
+struct KeyOwner {
+	char *fingerprint;
+	char *name;
+	char *extra_motd;
+	bool do_notify;
+};
+
+void
+do_notify(char *msg, char *title, char *icon)
+{
+	char *socket_path = NULL;
+	xasprintf(&socket_path, "unix:path=/run/user/%d/bus", getuid());
+	setenv("DBUS_SESSION_BUS_ADDRESS", socket_path, 0);
+
+	if (!notify_init(DEFAULT_NOTIFY_SOURCE)) {
+		do_log2(SYSLOG_LEVEL_ERROR, "Cannot init libnotify");
+		return;
+	}
+
+	{
+		char *server_name = NULL;
+		char *server_vendor = NULL;
+		char *server_version = NULL;
+		char *server_spec_version = NULL;
+
+		notify_get_server_info(&server_name, &server_vendor, &server_version, &server_spec_version);
+
+		debug2_f("Server name: %s, Server vendor: %s, Server version: %s, Server spec version: %s",
+		         server_name, server_vendor, server_version, server_spec_version);
+	}
+
+	NotifyNotification *notification =
+		notify_notification_new(title == NULL ? DEFAULT_NOTIFY_SOURCE : title,
+		                        msg,
+		                        icon == NULL ? DEFAULT_NOTIFY_ICON : icon);
+
+	notify_notification_set_urgency(notification, NOTIFY_URGENCY_CRITICAL);
+
+	if (!notify_notification_show(notification, NULL))
+		do_log2(SYSLOG_LEVEL_ERROR, "Cannot send notify with libnotify");
+
+	g_object_unref(G_OBJECT(notification));
+	notify_uninit();
+}
+
+static struct KeyOwner *
+get_key_owner(Session *s)
+{
+	struct KeyOwner *ko = malloc(sizeof(struct KeyOwner));
+	ko->fingerprint = sshkey_fingerprint(s->authctxt->auth_method_key, options.fingerprint_hash, SSH_FP_DEFAULT);
+	ko->name = NULL;
+	ko->extra_motd = NULL;
+	ko->do_notify = true;
+
+	// check file exist
+	struct stat st;
+	char *data_path = NULL;
+	xasprintf(&data_path, "%s/%s/key_owner.json", s->pw->pw_dir, _PATH_SSH_USER_DIR);
+	if (stat(data_path, &st) < 0) {
+		fprintf(stderr, "unable to find key_owner.json");
+		return ko;
+	}
+	size_t file_size = st.st_size;
+
+	// open file
+	char *data_raw = malloc(file_size);
+	FILE *fp = fopen(data_path, "rb");
+	if (!fp) {
+		fprintf(stderr, "unable to read key_owner.json");
+		return ko;
+	}
+
+	// read data
+	size_t bytes_read = fread(data_raw, 1, file_size, fp);
+	fclose(fp);
+	if (bytes_read != file_size)
+		fprintf(stderr, "Warning: raed %zu of %zu bytes\n", bytes_read, file_size);
+
+	// parse data
+	cJSON *data_parsed = cJSON_Parse(data_raw);
+	free(data_raw);
+	if (data_parsed == NULL) {
+		const char *error_ptr = cJSON_GetErrorPtr();
+		if (error_ptr != NULL)
+			fprintf(stderr, "json formart error at: %s\n", error_ptr);
+		else
+			fprintf(stderr, "json formart error\n");
+		return ko;
+	}
+
+	// get keyowner for current fingerprint
+	cJSON *keyowner = NULL;
+	{
+		cJSON *fp = NULL;
+		cJSON *fp_single = NULL;
+		cJSON_ArrayForEach(keyowner, data_parsed) {
+			fp = cJSON_GetObjectItemCaseSensitive(keyowner, "fingerprint");
+			cJSON_ArrayForEach(fp_single, fp) {
+				if (strcmp(cJSON_GetStringValue(fp_single), ko->fingerprint) == 0)
+					goto ko_fp_end;
+			}
+		}
+	}
+ko_fp_end:
+	if (keyowner == NULL) {
+		cJSON_Delete(data_parsed);
+		return ko;
+	}
+
+	// get extra parameter
+	const cJSON *name = NULL;
+	const cJSON *extra_motd = NULL;
+	const cJSON *do_notify = NULL;
+	name = cJSON_GetObjectItemCaseSensitive(keyowner, "name");
+	extra_motd = cJSON_GetObjectItemCaseSensitive(keyowner, "extra_motd");
+	do_notify = cJSON_GetObjectItemCaseSensitive(keyowner, "do_notify");
+	if (cJSON_IsString(name))
+		ko->name = strdup(cJSON_GetStringValue(name));
+	if (cJSON_IsString(extra_motd))
+		ko->extra_motd = strdup(cJSON_GetStringValue(extra_motd));
+	ko->do_notify = cJSON_IsBool(do_notify) ? cJSON_IsTrue(do_notify) : true;
+
+	cJSON_Delete(data_parsed);
+	return ko;
+}
+
+void
+free_key_owner(struct KeyOwner *ko) {
+	free(ko->fingerprint);
+	free(ko->name);
+	free(ko->extra_motd);
+	free(ko);
+}
+
+void
+do_login_notify(Session *s, char *command)
+{
+	char *msg;
+	struct KeyOwner *ko = get_key_owner(s);
+	if (!ko->do_notify)
+		return;
+	if (ko->name != NULL)
+		xasprintf(&msg, "有人视奸喵！\n公钥所有者：%s", ko->name);
+	else
+		xasprintf(&msg, "有人视奸喵！\n公钥指纹：%s", ko->fingerprint);
+	free_key_owner(ko);
+	if (command != NULL)
+		xasprintf(&msg, "%s\n执行命令：\n%s", msg, command);
+	do_notify(msg, "反视奸小助手", NULL);
+}
+
+void
+do_extra_motd(Session *s)
+{
+	struct KeyOwner * ko = get_key_owner(s);
+	if (ko->extra_motd != NULL)
+		printf("%s\n", ko->extra_motd);
+	free_key_owner(ko);
+}
+#endif
 
 #define USE_PIPES 1
 /*
@@ -732,6 +902,10 @@ do_login(struct ssh *ssh, Session *s, const char *command)
 	display_loginmsg();
 
 	do_motd();
+
+#ifdef NOTIFY
+	do_extra_motd(s);
+#endif
 }
 
 /*
@@ -1986,6 +2160,10 @@ session_shell_req(struct ssh *ssh, Session *s)
 
 	channel_set_xtype(ssh, s->chanid, "session:shell");
 
+#ifdef NOTIFY
+	do_login_notify(s, NULL);
+#endif
+
 	return do_exec(ssh, s, NULL) == 0;
 }
 
@@ -2001,6 +2179,10 @@ session_exec_req(struct ssh *ssh, Session *s)
 		sshpkt_fatal(ssh, r, "%s: parse packet", __func__);
 
 	channel_set_xtype(ssh, s->chanid, "session:command");
+
+#ifdef NOTIFY
+	do_login_notify(s, command);
+#endif
 
 	success = do_exec(ssh, s, command) == 0;
 	free(command);
