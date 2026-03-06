@@ -5051,6 +5051,16 @@ AC_SUBST([GSSLIBS])
 AC_SUBST([K5LIBS])
 AC_SUBST([CHANNELLIBS])
 
+# Login notify support
+PKG_CHECK_MODULES([libnotify], [libnotify >= 0.7], [
+	AC_DEFINE([NOTIFY], [1], [Have login notify on desktop with libnotify])
+	AC_DEFINE([HAVE_ATTRIBUTE__SENTINEL__], [1], [Glib need sentinel])
+	CFLAGS="$CFLAGS $libnotify_CFLAGS"
+	LDFLAGS="$LDFLAGS $libnotify_LDFLAGS"
+	SSHDSESSIONLIBS="$libnotify_LIBS"
+])
+AC_SUBST([SSHDSESSIONLIBS])
+
 # Looking for programs, paths and files
 
 PRIVSEP_PATH=/var/empty
@@ -5893,6 +5903,9 @@ echo "        +for FIDO2: ${LIBFIDO2}"
 fi
 if test ! -z "${SSHDLIBS}"; then
 echo "         +for sshd: ${SSHDLIBS}"
+fi
+if test ! -z "${SSHDSESSIONLIBS}"; then
+echo " +for sshd-session: ${SSHDSESSIONLIBS}"
 fi
 
 echo ""

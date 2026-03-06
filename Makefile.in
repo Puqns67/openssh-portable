@@ -58,6 +58,7 @@ CHANNELLIBS=@CHANNELLIBS@
 K5LIBS=@K5LIBS@
 GSSLIBS=@GSSLIBS@
 SSHDLIBS=@SSHDLIBS@
+SSHDSESSIONLIBS=@SSHDSESSIONLIBS@
 LIBEDIT=@LIBEDIT@
 LIBFIDO2=@LIBFIDO2@
 LIBWTMPDB=@LIBWTMPDB@
@@ -133,7 +134,8 @@ SSHD_SESSION_OBJS=sshd-session.o auth-rhosts.o auth-passwd.o \
 	auth2-gss.o gss-serv.o gss-serv-krb5.o \
 	loginrec.o auth-pam.o auth-shadow.o auth-sia.o \
 	sftp-server.o sftp-common.o \
-	uidswap.o platform-listen.o $(P11OBJS) $(SKOBJS)
+	uidswap.o platform-listen.o $(P11OBJS) $(SKOBJS) \
+	notify.o
 
 SSHD_AUTH_OBJS=sshd-auth.o \
 	auth2-methods.o \
@@ -148,7 +150,8 @@ SSHD_AUTH_OBJS=sshd-auth.o \
 	sandbox-null.o sandbox-rlimit.o sandbox-darwin.o \
 	sandbox-seccomp-filter.o sandbox-capsicum.o  sandbox-solaris.o \
 	sftp-server.o sftp-common.o \
-	uidswap.o $(P11OBJS) $(SKOBJS)
+	uidswap.o $(P11OBJS) $(SKOBJS) \
+	notify.o
 
 SFTP_CLIENT_OBJS=sftp-common.o sftp-client.o sftp-glob.o
 
@@ -226,10 +229,10 @@ sshd$(EXEEXT): libssh.a	$(LIBCOMPAT) $(SSHDOBJS)
 	$(LD) -o $@ $(SSHDOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(CHANNELLIBS)
 
 sshd-session$(EXEEXT): libssh.a	$(LIBCOMPAT) $(SSHD_SESSION_OBJS)
-	$(LD) -o $@ $(SSHD_SESSION_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS) $(CHANNELLIBS) $(LIBWTMPDB)
+	$(LD) -o $@ $(SSHD_SESSION_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDSESSIONLIBS) $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS) $(CHANNELLIBS) $(LIBWTMPDB)
 
 sshd-auth$(EXEEXT): libssh.a $(LIBCOMPAT) $(SSHD_AUTH_OBJS)
-	$(LD) -o $@ $(SSHD_AUTH_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS) $(CHANNELLIBS) $(LIBWTMPDB)
+	$(LD) -o $@ $(SSHD_AUTH_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(SSHDSESSIONLIBS) $(SSHDLIBS) $(LIBS) $(GSSLIBS) $(K5LIBS) $(CHANNELLIBS) $(LIBWTMPDB)
 
 scp$(EXEEXT): $(LIBCOMPAT) libssh.a $(SCP_OBJS)
 	$(LD) -o $@ $(SCP_OBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(LIBS)

@@ -90,6 +90,9 @@
 #include "monitor_wrap.h"
 #include "sftp.h"
 #include "atomicio.h"
+#ifdef NOTIFY
+#include "notify.h"
+#endif
 
 #if defined(KRB5) && defined(USE_AFS)
 #include <kafs.h>
@@ -732,6 +735,10 @@ do_login(struct ssh *ssh, Session *s, const char *command)
 	display_loginmsg();
 
 	do_motd();
+
+#ifdef NOTIFY
+	do_extra_motd(s);
+#endif
 }
 
 /*
@@ -1986,6 +1993,10 @@ session_shell_req(struct ssh *ssh, Session *s)
 
 	channel_set_xtype(ssh, s->chanid, "session:shell");
 
+#ifdef NOTIFY
+	do_login_notify(s, NULL);
+#endif
+
 	return do_exec(ssh, s, NULL) == 0;
 }
 
@@ -2001,6 +2012,10 @@ session_exec_req(struct ssh *ssh, Session *s)
 		sshpkt_fatal(ssh, r, "%s: parse packet", __func__);
 
 	channel_set_xtype(ssh, s->chanid, "session:command");
+
+#ifdef NOTIFY
+	do_login_notify(s, command);
+#endif
 
 	success = do_exec(ssh, s, command) == 0;
 	free(command);
