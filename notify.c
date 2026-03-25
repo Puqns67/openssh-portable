@@ -27,7 +27,8 @@ typedef struct NotifySettings {
   char *content;
 } NotifySettings;
 
-typedef struct NotifyUser {
+typedef struct NotifyUserSettings {
+  bool loaded;
   char *fingerprint;
   char *name;
   char *extra_motd;
@@ -40,7 +41,7 @@ typedef struct NotifyUser {
 extern ServerOptions options;
 
 struct NotifySettings settings;
-struct NotifyUser user;
+struct NotifyUserSettings usersettings;
 
 char *toml_table_string_safe(const toml_table_t *tbl, const char *key,
                              char *def) {
@@ -98,9 +99,9 @@ void load_notify_config(const Session *s) {
   if (settings.loaded)
     return;
 
-  user.fingerprint = sshkey_fingerprint(
+  usersettings.fingerprint = sshkey_fingerprint(
       s->authctxt->auth_method_key, options.fingerprint_hash, SSH_FP_DEFAULT);
-  user.do_notify = true;
+  usersettings.do_notify = true;
 
   // get config file
   char *config_path = NULL;
@@ -145,44 +146,60 @@ void load_notify_config(const Session *s) {
     int yl = toml_array_len(fingerprints);
     for (int y = 0; y < yl; y++) {
       toml_value_t fingerprint = toml_array_string(fingerprints, y);
-      if (fingerprint.ok && strcmp(fingerprint.u.s, user.fingerprint) == 0)
-        goto notify_fingerprint_end;
+      if (fingerprint.ok &&
+          strcmp(fingerprint.u.s, usersettings.fingerprint) == 0)
+        goto notify_fingerprint_matched;
     }
   }
-notify_fingerprint_end:
-  if (user_config == NULL) {
-    return;
-  }
 
+  return;
+
+notify_fingerprint_matched:
   // get extra parameter
-  user.name = toml_table_string_safe(user_config, "name", NULL);
-  user.extra_motd = toml_table_string_safe(user_config, "extra_motd", NULL);
-  user.do_notify = toml_table_bool_safe(user_config, "do_notify", true);
-  user.notify_title = toml_table_string_safe(user_config, "notify_title", NULL);
-  user.notify_icon = toml_table_string_safe(user_config, "notify_icon", NULL);
-  user.notify_content =
+  usersettings.name = toml_table_string_safe(user_config, "name", NULL);
+  usersettings.extra_motd =
+      toml_table_string_safe(user_config, "extra_motd", NULL);
+  usersettings.do_notify = toml_table_bool_safe(user_config, "do_notify", true);
+  usersettings.notify_title =
+      toml_table_string_safe(user_config, "notify_title", NULL);
+  usersettings.notify_icon =
+      toml_table_string_safe(user_config, "notify_icon", NULL);
+  usersettings.notify_content =
       toml_table_string_safe(user_config, "notify_content", NULL);
+
+  usersettings.loaded = true;
 }
 
 void do_login_notify(const Session *s, const char *command) {
   load_notify_config(s);
-  if (!settings.loaded || !user.do_notify)
+  if (!settings.loaded)
     return;
-  char *msg =
-      user.notify_content == NULL ? settings.content : user.notify_content;
-  if (user.name != NULL)
-    xasprintf(&msg, "%s\n公钥所有者：%s", msg, user.name);
+
+  if (usersettings.loaded && !usersettings.do_notify)
+    return;
+
+  char *msg = settings.content;
+  if (usersettings.loaded && usersettings.notify_content != NULL)
+    msg = usersettings.notify_content;
+
+  if (usersettings.loaded && usersettings.name != NULL)
+    xasprintf(&msg, "%s\n公钥所有者：%s", msg, usersettings.name);
   else
-    xasprintf(&msg, "%s\n公钥指纹：%s", msg, user.fingerprint);
+    xasprintf(&msg, "%s\n公钥指纹：%s", msg, usersettings.fingerprint);
+
   if (command != NULL)
     xasprintf(&msg, "%s\n执行命令：\n%s", msg, command);
-  do_notify(msg, user.notify_title, user.notify_icon);
+
+  if (usersettings.loaded)
+    do_notify(msg, usersettings.notify_title, usersettings.notify_icon);
+  else
+    do_notify(msg, NULL, NULL);
 }
 
 void do_extra_motd(const Session *s) {
   load_notify_config(s);
   if (!settings.loaded)
     return;
-  if (user.extra_motd != NULL)
-    printf("%s\n", user.extra_motd);
+  if (usersettings.loaded && usersettings.extra_motd != NULL)
+    printf("%s\n", usersettings.extra_motd);
 }
